@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Deslocamento do Drone em Tempo Real</title>
+    <style>
+        table {
+            border-collapse: collapse;
+            width: 100%;
+        }
+
+        th, td {
+            border: 1px solid black;
+            padding: 8px;
+            text-align: left;
+        }
+
+        th {
+            background-color: #f2f2f2;
+        }
+    </style>
+</head>
+<body>
+    <h1>Deslocamento do Drone em Tempo Real</h1>
+    <table id="data-table">
+        <thead>
+            <tr>
+                <th>Tempo (s)</th>
+                <th>Deslocamento (m)</th>
+            </tr>
+        </thead>
+        <tbody>
+            <!-- Dados inseridos dinamicamente -->
+        </tbody>
+    </table>
+
+    <script>
+        const tableBody = document.getElementById('data-table').querySelector('tbody');
+        const socket = new WebSocket('ws://localhost:8766');
+
+        socket.onopen = function () {
+            console.log('Conexão WebSocket estabelecida.');
+        };
+
+        socket.onmessage = function (event) {
+            console.log('Mensagem recebida do WebSocket:', event.data);
+            const data = JSON.parse(event.data);
+
+            // Criar uma nova linha na tabela
+            const row = document.createElement('tr');
+            const cellTime = document.createElement('td');
+            const cellPosition = document.createElement('td');
+
+            cellTime.textContent = data.tempo.toFixed(2); // Tempo formatado com 2 casas decimais
+            cellPosition.textContent = data.deslocamento.toFixed(2); // Deslocamento formatado com 2 casas decimais
+
+            row.appendChild(cellTime);
+            row.appendChild(cellPosition);
+            tableBody.appendChild(row);
+        };
+
+        socket.onerror = function (error) {
+            console.error('Erro no WebSocket:', error);
+        };
+
+        socket.onclose = function () {
+            console.log('Conexão WebSocket encerrada.');
+        };
+    </script>
+</body>
+</html>
