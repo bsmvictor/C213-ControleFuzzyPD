@@ -4,7 +4,7 @@ import json
 from paho.mqtt.client import Client
 
 # Configurações do MQTT
-BROKER = "localhost"
+BROKER = "broker.hivemq.com"
 PORT = 1883
 TOPIC_SUBSCRIBE = "drone/deslocamento"
 
