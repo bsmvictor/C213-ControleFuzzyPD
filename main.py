@@ -4,17 +4,28 @@ import numpy as np
 import pandas as pd
 import skfuzzy as fuzz
 import skfuzzy.control as ctrl
-import matplotlib.pyplot as plt
+# import matplotlib.pyplot as plt
 import paho.mqtt.client as mqtt
 from tabulate import tabulate
 import time
 
+free_move = False
+is_going_home = False
+is_moving = False
+current_position = 0
+setpoint = None
+origin = None
+destination = None
+errors = []
+direction = None
+
 # Configurações do Broker MQTT
-BROKER = "broker.hivemq.com"
+BROKER = "test.mosquitto.org"
 PORT = 1883
 
 # Configurações iniciais
 ciano = '\033[96m'  # Cor azul-ciano
+
 
 # Função para definir os universos e funções de pertinência
 def define_variables():
@@ -47,17 +58,17 @@ def define_variables():
 
 # Função para exibir as funções de pertinência
 # def show_fuzzyfication(error, delta_error, motor_power):
-    # error.view()
-    # plt.axline((0, 0.25), (1000, 0.25), color='black', linestyle='--')
-    # plt.xlim(0, 400)
-    #
-    # delta_error.view()
-    # plt.axline((0, 0.4), (1000, 0.4), color='black', linestyle='--')
-    # plt.xlim(-250, 250)
-    #
-    # motor_power.view()
-    # plt.axline((0, 0.4), (1000, 0.4), color='black', linestyle='--')
-    # plt.show()
+# error.view()
+# plt.axline((0, 0.25), (1000, 0.25), color='black', linestyle='--')
+# plt.xlim(0, 400)
+#
+# delta_error.view()
+# plt.axline((0, 0.4), (1000, 0.4), color='black', linestyle='--')
+# plt.xlim(-250, 250)
+#
+# motor_power.view()
+# plt.axline((0, 0.4), (1000, 0.4), color='black', linestyle='--')
+# plt.show()
 
 
 # Função para criar as regras de controle
@@ -70,113 +81,190 @@ def create_rules(error, delta_error, motor_power):
         'M', 'M', 'G', 'G', 'MG',
     ]
 
-    BaseRules = [
+    base_rules = [
         ctrl.Rule(error[Error] & delta_error[Delta_error], motor_power[Motor_power])
         for (Error, Delta_error), Motor_power in
         zip(itertools.product(error.terms.keys(), delta_error.terms.keys()), power_result)
     ]
 
-    return BaseRules
+    return base_rules
 
 
 # Função para exibir a tabela de regras
-def show_table(error, delta_error, motor_power, BaseRules):
+def show_table(error, delta_error, motor_power, base_rules):
     table = []
     for Erro in error.terms:
         for Delta_erro in delta_error.terms:
-            for regra in BaseRules:
+            for regra in base_rules:
                 antecedente = str(regra).split('IF ')[1].split(' THEN')[0].replace('AND ', '')
                 consequente = str(regra).split('IF ')[1].split(' THEN')[1].split('AND ')[0]
 
-                classificacoes = re.findall(r'\[(.*?)\]', (antecedente + consequente))
+                classificacoes = re.findall(r'\[(.*?)]', (antecedente + consequente))
                 if Erro == classificacoes[0] and Delta_erro == classificacoes[1]:
                     table.append([classificacoes[0], classificacoes[1], classificacoes[2]])
                     break
 
     df = pd.DataFrame(table, columns=[error.label, delta_error.label, motor_power.label])
-    pivotTable = pd.DataFrame(df.pivot(index=delta_error.label, columns=error.label, values=motor_power.label).reindex(
+    pivot_table = pd.DataFrame(df.pivot(index=delta_error.label, columns=error.label, values=motor_power.label).reindex(
         index=delta_error.terms, columns=error.terms))
-    pivotTable.index.name = f'{ciano}{"E"}\033[0m'
-    print(tabulate(pivotTable, headers='keys', tablefmt='fancy_grid', stralign='center', showindex='always'))
+    pivot_table.index.name = f'{ciano}{"E"}\033[0m'
+    print(tabulate(pivot_table, headers='keys', tablefmt='fancy_grid', stralign='center', showindex='always'))
+
+
+def on_message(client, userdata, msg):
+    global is_going_home
+    global setpoint
+    global current_position
+    global free_move
+    global destination
+    global errors
+    global direction
+
+    try:
+        payload = msg.payload.decode('utf-8')
+        # print(f"Mensagem recebida no tópico {msg.topic}: {payload}")
+        if msg.topic == "drone/rth":
+            setpoint = 1
+            is_going_home = False
+
+        if msg.topic == "drone/destino":
+            destination = int(payload)
+
+            if destination > 1000:
+                destination = 1000
+            elif destination <= 0:
+                destination = 1
+
+            print(destination)
+
+        if msg.topic == "drone/can_move":
+            setpoint = destination
+
+        if msg.topic == "drone/joystick":
+            direction = payload
+            print(payload)
+
+        if msg.topic == "drone/free_movement":
+            if payload == "true":
+                free_move = True
+                errors = [abs(setpoint - current_position)]
+            else:
+                free_move = False
+
+    except Exception as e:
+        print(f"Erro ao processar mensagem: {e}")
 
 
 # Função para simular o controle
-def control_simulation(baseRules):
-    setpoint = 1
-    current_position = 1000
-    t = 0
-    dt = 1
+def control_simulation(base_rules):
+    global current_position
+    global setpoint
+    global errors
+    global direction
 
-    ErrorControl = ctrl.ControlSystemSimulation(ctrl.ControlSystem(baseRules))
+    t = 0
+    error_control = ctrl.ControlSystemSimulation(ctrl.ControlSystem(base_rules))
 
     positions = [current_position]
-    errors = [abs(setpoint - current_position)]
 
     client = mqtt.Client()
     client.connect(BROKER, PORT, keepalive=60)
     client.loop_start()
 
+    client.subscribe("drone/rth")
+    client.subscribe("drone/origem")
+    client.subscribe("drone/joystick")
+
+    client.subscribe("drone/deslocamento")
+    client.subscribe("drone/potencia")
+    client.subscribe("drone/erro")
+    client.subscribe("drone/can_move")
+    client.subscribe("drone/free_movement")
+
     while True:
         try:
-            if current_position < setpoint:
-                U_max = 6
-            else:
-                U_max = 4
+            if setpoint is not None and not free_move:
+                if current_position < setpoint:
+                    u_max = 6
+                else:
+                    u_max = 4
 
-            current_error = abs(setpoint - current_position)
-            errors.append(current_error)
+                current_error = abs(setpoint - current_position)
+                # print("Posicao: {}".format(current_position))
+                # print("Erro:    {}".format(current_error))
+                errors.append(current_error)
 
-            if current_error < 10:
-                FA = 0.984825
-            elif current_error < 25:
-                FA = 0.994
-            else:
-                FA = 0.996
+                if current_error < 10:
+                    fa = 0.984825
+                elif current_error < 25:
+                    fa = 0.994
+                else:
+                    fa = 0.996
 
-            current_delta_error = (errors[-1] - errors[-2])
+                current_delta_error = (errors[-1] - errors[-2])
 
-            ErrorControl.input['error'] = current_error
-            ErrorControl.input['delta_error'] = current_delta_error
-            ErrorControl.compute()
+                error_control.input['error'] = current_error
+                error_control.input['delta_error'] = current_delta_error
+                error_control.compute()
 
-            P_Motor = ErrorControl.output['motor_power']
+                p_motor = error_control.output['motor_power']
 
-            if current_error > 5:
-                P_H13 = P_Motor
-                P_H24 = P_Motor
-            else:
-                P_H13 = 0.353
-                P_H24 = 0.353
+                if current_error > 5:
+                    p_h13 = p_motor
+                    p_h24 = p_motor
+                else:
+                    p_h13 = 0.353
+                    p_h24 = 0.353
 
-            d_t = FA * current_position * 1.01398 + 0.5 * (U_max * P_H13 + U_max * P_H24)
+                d_t = fa * current_position * 1.01398 + 0.5 * (u_max * p_h13 + u_max * p_h24)
 
-            if current_position < setpoint:
-                current_position = d_t
-            else:
-                delta_movement = d_t - current_position
-                current_position = current_position - delta_movement
+                if current_position < setpoint:
+                    current_position = d_t
+                else:
+                    delta_movement = d_t - current_position
+                    current_position = current_position - delta_movement
 
-            positions.append(current_position)
-            t += 1
+                positions.append(current_position)
+                t += 1
 
-            # Publicar no MQTT
-            # payload = f"Tempo: {t}, Deslocamento: {current_position:.2f}"
-            position_payload = f"\n{current_position:.2f}"
-            client.publish("drone/deslocamento", position_payload)
+                time.sleep(0.1)
 
-            motor_payload = f"\n{P_H13*100:.2f}"
-            client.publish("drone/potencia", motor_payload)
+                # Publicar no MQTT
+                # payload = f"Tempo: {t}, Deslocamento: {current_position:.2f}"
+                position_payload = f"\n{current_position:.2f}"
+                client.publish("drone/deslocamento", position_payload)
 
-            error_payload = f"\n{current_error:.2f}"
-            client.publish("drone/erro", error_payload)
+                motor_payload = f"\n{p_h13 * 100:.2f}"
+                client.publish("drone/potencia", motor_payload)
 
-            print(f"Publicado: {position_payload}")
+                error_payload = f"\n{current_error:.2f}m"
+                client.publish("drone/erro", error_payload)
 
-            time.sleep(0.2)
+            if free_move:
+                if direction == "up":
+                    if current_position >= 1000:
+                        current_position = 1000
+                    else:
+                        current_position += 10
 
+                    position_payload = f"\n{current_position:.2f}"
+                    client.publish("drone/deslocamento", position_payload)
+
+                elif direction == "down":
+                    if current_position <= 1:
+                        current_position = 1
+                    else:
+                        current_position -= 10
+
+                    position_payload = f"\n{current_position:.2f}"
+                    client.publish("drone/deslocamento", position_payload)
+
+            direction = None
+            time.sleep(0.1)
 
         except Exception as e:
             print(f"Erro no loop principal: {e}")
+
 
     # Gráfico do deslocamento
     # plt.plot(range(len(positions)), positions, label='Deslocamento (m)', color='blue')
@@ -196,8 +284,26 @@ def main():
     base_rules = create_rules(erro, delta_erro, potencia_motor)
     show_table(erro, delta_erro, potencia_motor, base_rules)
 
-    control_simulation(base_rules)
+    client = mqtt.Client()
+    client.on_message = on_message
+    client.connect(BROKER, PORT, keepalive=60)
+    client.loop_start()
 
+    global current_position
+    global setpoint
+
+    client.subscribe("drone/rth")
+    client.subscribe("drone/origem")
+    client.subscribe("drone/destino")
+    client.subscribe("drone/deslocamento")
+    client.subscribe("drone/potencia")
+    client.subscribe("drone/erro")
+    client.subscribe("drone/can_move")
+    client.subscribe("drone/free_movement")
+    client.subscribe("drone/joystick")
+
+    while True:
+        control_simulation(base_rules)
 
 if __name__ == "__main__":
     main()
