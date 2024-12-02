@@ -4,7 +4,6 @@ import numpy as np
 import pandas as pd
 import skfuzzy as fuzz
 import skfuzzy.control as ctrl
-# import matplotlib.pyplot as plt
 import paho.mqtt.client as mqtt
 from tabulate import tabulate
 import time
@@ -54,21 +53,6 @@ def define_variables():
     motor_power['MG'] = fuzz.trapmf(motor_power.universe, [0.62, 0.88, 1, 1])
 
     return error, delta_error, motor_power
-
-
-# Função para exibir as funções de pertinência
-# def show_fuzzyfication(error, delta_error, motor_power):
-# error.view()
-# plt.axline((0, 0.25), (1000, 0.25), color='black', linestyle='--')
-# plt.xlim(0, 400)
-#
-# delta_error.view()
-# plt.axline((0, 0.4), (1000, 0.4), color='black', linestyle='--')
-# plt.xlim(-250, 250)
-#
-# motor_power.view()
-# plt.axline((0, 0.4), (1000, 0.4), color='black', linestyle='--')
-# plt.show()
 
 
 # Função para criar as regras de controle
@@ -122,7 +106,6 @@ def on_message(client, userdata, msg):
 
     try:
         payload = msg.payload.decode('utf-8')
-        # print(f"Mensagem recebida no tópico {msg.topic}: {payload}")
         if msg.topic == "drone/rth":
             setpoint = 1
             is_going_home = False
@@ -150,9 +133,10 @@ def on_message(client, userdata, msg):
                 errors = [abs(setpoint - current_position)]
             else:
                 free_move = False
+            print(payload)
 
     except Exception as e:
-        print(f"Erro ao processar mensagem: {e}")
+        print(f"Erro ao processar mensagem: {Exception}")
 
 
 # Função para simular o controle
@@ -163,6 +147,7 @@ def control_simulation(base_rules):
     global direction
 
     t = 0
+    p_h13 = 0
     error_control = ctrl.ControlSystemSimulation(ctrl.ControlSystem(base_rules))
 
     positions = [current_position]
@@ -190,12 +175,10 @@ def control_simulation(base_rules):
                     u_max = 4
 
                 current_error = abs(setpoint - current_position)
-                # print("Posicao: {}".format(current_position))
-                # print("Erro:    {}".format(current_error))
                 errors.append(current_error)
 
                 if current_error < 10:
-                    fa = 0.984825
+                    fa = 0.9849
                 elif current_error < 25:
                     fa = 0.994
                 else:
@@ -213,8 +196,8 @@ def control_simulation(base_rules):
                     p_h13 = p_motor
                     p_h24 = p_motor
                 else:
-                    p_h13 = 0.353
-                    p_h24 = 0.353
+                    p_h13 = 0.37
+                    p_h24 = 0.37
 
                 d_t = fa * current_position * 1.01398 + 0.5 * (u_max * p_h13 + u_max * p_h24)
 
@@ -229,14 +212,6 @@ def control_simulation(base_rules):
 
                 time.sleep(0.1)
 
-                # Publicar no MQTT
-                # payload = f"Tempo: {t}, Deslocamento: {current_position:.2f}"
-                position_payload = f"\n{current_position:.2f}"
-                client.publish("drone/deslocamento", position_payload)
-
-                motor_payload = f"\n{p_h13 * 100:.2f}"
-                client.publish("drone/potencia", motor_payload)
-
                 error_payload = f"\n{current_error:.2f}m"
                 client.publish("drone/erro", error_payload)
 
@@ -245,37 +220,29 @@ def control_simulation(base_rules):
                     if current_position >= 1000:
                         current_position = 1000
                     else:
-                        current_position += 10
-
-                    position_payload = f"\n{current_position:.2f}"
-                    client.publish("drone/deslocamento", position_payload)
+                        current_position += 1
 
                 elif direction == "down":
                     if current_position <= 1:
                         current_position = 1
                     else:
-                        current_position -= 10
+                        current_position -= 1
 
-                    position_payload = f"\n{current_position:.2f}"
-                    client.publish("drone/deslocamento", position_payload)
+                elif direction == "null":
+                    current_position = current_position
 
-            direction = None
+                p_h13 = 0.37
+
+            position_payload = f"\n{current_position:.2f}"
+            client.publish("drone/deslocamento", position_payload)
+
+            motor_payload = f"\n{p_h13 * 100:.2f}"
+            client.publish("drone/potencia", motor_payload)
+
             time.sleep(0.1)
 
         except Exception as e:
             print(f"Erro no loop principal: {e}")
-
-
-    # Gráfico do deslocamento
-    # plt.plot(range(len(positions)), positions, label='Deslocamento (m)', color='blue')
-    # plt.axhline(setpoint, color='red', linestyle='--', label='Setpoint')
-    # plt.xlabel('Tempo (s)')
-    # plt.ylabel('Deslocamento (m)')
-    # plt.title('Deslocamento do Drone ao Longo do Tempo')
-    # plt.grid()
-    # plt.legend()
-    # plt.show()
-
 
 # Função principal
 def main():
@@ -304,6 +271,7 @@ def main():
 
     while True:
         control_simulation(base_rules)
+
 
 if __name__ == "__main__":
     main()
