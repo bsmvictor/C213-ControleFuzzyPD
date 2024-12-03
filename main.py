@@ -153,6 +153,7 @@ def control_simulation(base_rules):
     positions = [current_position]
 
     client = mqtt.Client()
+    client.on_message = on_message
     client.connect(BROKER, PORT, keepalive=60)
     client.loop_start()
 
@@ -178,11 +179,11 @@ def control_simulation(base_rules):
                 errors.append(current_error)
 
                 if current_error < 10:
-                    fa = 0.9849
+                    fa = 0.984
                 elif current_error < 25:
                     fa = 0.994
                 else:
-                    fa = 0.996
+                    fa = 0.998
 
                 current_delta_error = (errors[-1] - errors[-2])
 
@@ -196,8 +197,8 @@ def control_simulation(base_rules):
                     p_h13 = p_motor
                     p_h24 = p_motor
                 else:
-                    p_h13 = 0.37
-                    p_h24 = 0.37
+                    p_h13 = 0.34
+                    p_h24 = 0.34
 
                 d_t = fa * current_position * 1.01398 + 0.5 * (u_max * p_h13 + u_max * p_h24)
 
@@ -220,18 +221,18 @@ def control_simulation(base_rules):
                     if current_position >= 1000:
                         current_position = 1000
                     else:
-                        current_position += 1
+                        current_position += 5
 
                 elif direction == "down":
                     if current_position <= 1:
                         current_position = 1
                     else:
-                        current_position -= 1
+                        current_position -= 5
 
                 elif direction == "null":
                     current_position = current_position
 
-                p_h13 = 0.37
+                p_h13 = 0.34
 
             position_payload = f"\n{current_position:.2f}"
             client.publish("drone/deslocamento", position_payload)
